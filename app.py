@@ -32,9 +32,8 @@ try:
 except ImportError:
     SMOTE_AVAILABLE = False
 
-
 # ===========================================================================
-# 🏷️ PASTE HERE: Friendly Business Labels Dictionary & Helper Function
+# 🏷️ Friendly Business Labels Dictionary & Helper Function
 # ===========================================================================
 VARIABLE_LABELS = {
     "rwtfpna": "Welfare TFP (National Prices)",
@@ -65,9 +64,12 @@ VARIABLE_LABELS = {
 
 def get_label(col_name):
     """Returns human-readable industry label if available."""
-    return VARIABLE_LABELS.get(col_name, col_name)
+    if col_name in VARIABLE_LABELS:
+        return f"{VARIABLE_LABELS[col_name]} ({col_name})"
+    return col_name
 
 # ===========================================================================
+
 st.set_page_config(page_title="Sovereign Risk Early Warning System", page_icon="🏦", layout="wide")
 
 # ---------------------------------------------------------------------------
@@ -139,7 +141,7 @@ if XGB_AVAILABLE:
 st.title("🏦 Sovereign Recession Risk & Early Warning System (SR-EWS)")
 st.caption(
     "**Enterprise Solution for African Markets:** Quantitative macro-risk forecasting, credit loss decision-support, "
-    "and interactive policy stress-testing for financial institutions and investors."
+    "and interactive policy stress-testing for financial institutions, multilateral lenders, and investors."
 )
 
 # ---------------------------------------------------------------------------
@@ -267,7 +269,7 @@ def render_eda(df, target_col, target_type="Binary classification"):
             st.info("Dataset quality verified: No missing values detected.")
         else:
             fig, ax = plt.subplots(figsize=(4, 3))
-            ax.barh(missing.index.astype(str), missing.values, color="#e67e22")
+            ax.barh([get_label(c) for c in missing.index], missing.values, color="#e67e22")
             ax.set_xlabel("Missing Data Count")
             ax.invert_yaxis()
             st.pyplot(fig)
@@ -278,9 +280,9 @@ def render_eda(df, target_col, target_type="Binary classification"):
         fig, ax = plt.subplots(figsize=(min(0.5 * len(numeric_cols) + 2, 10), min(0.5 * len(numeric_cols) + 2, 10)))
         im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1)
         ax.set_xticks(range(len(numeric_cols)))
-        ax.set_xticklabels(numeric_cols, rotation=90, fontsize=7)
+        ax.set_xticklabels([get_label(c) for c in numeric_cols], rotation=90, fontsize=6)
         ax.set_yticks(range(len(numeric_cols)))
-        ax.set_yticklabels(numeric_cols, fontsize=7)
+        ax.set_yticklabels([get_label(c) for c in numeric_cols], fontsize=6)
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         st.pyplot(fig)
 
@@ -298,7 +300,8 @@ with st.sidebar:
 
         default_target = "growthbucket" if "growthbucket" in raw_df.columns else raw_df.columns[-1]
         target_col = st.selectbox("Target Outcome Variable", options=list(raw_df.columns),
-                                   index=list(raw_df.columns).index(default_target))
+                                   index=list(raw_df.columns).index(default_target),
+                                   format_func=get_label)
 
         guessed_binary = raw_df[target_col].nunique(dropna=True) <= 2
         target_type = st.radio(
@@ -484,14 +487,15 @@ with col2:
 best_result = st.session_state.results[best_name]
 
 # ---------------------------------------------------------------------------
-# Drivers of Vulnerability (Feature Importance)
+# Drivers of Vulnerability (Feature Importance with Friendly Labels)
 # ---------------------------------------------------------------------------
 st.subheader(f"🔍 Primary Macroeconomic Vulnerability Drivers ({best_name})")
 importance = get_feature_importance(best_result["model"], st.session_state.feature_cols)
 if importance is not None:
     top_importance = importance.head(10).sort_values(ascending=True)
-    fig3, ax3 = plt.subplots(figsize=(6, 3))
-    ax3.barh(top_importance.index.astype(str), top_importance.values, color="#c0392b")
+    fig3, ax3 = plt.subplots(figsize=(7, 3.5))
+    top_labels = [get_label(col) for col in top_importance.index]
+    ax3.barh(top_labels, top_importance.values, color="#c0392b")
     ax3.set_xlabel("Relative Macro Vulnerability Weight")
     st.pyplot(fig3)
 else:
@@ -514,12 +518,17 @@ tab1, tab2, tab3 = st.tabs(["⚡ Single-Country Assessment", "🔮 Macro Stress-
 with tab1:
     st.write("Input current country macroeconomic indicators to evaluate recession risk and access financial action triggers:")
     input_vals = {}
-    n_cols = 3
+    n_cols = 2
     cols = st.columns(n_cols)
     for i, feat in enumerate(feature_cols):
         s = stats[feat]
         with cols[i % n_cols]:
-            input_vals[feat] = st.number_input(f"{feat}", value=round(s["mean"], 3), format="%.4f")
+            input_vals[feat] = st.number_input(
+                label=get_label(feat),
+                value=round(s["mean"], 4),
+                format="%.4f",
+                help=f"Raw dataset variable: {feat}"
+            )
 
     if st.button("Generate Sovereign Risk Report", type="primary"):
         X_new = pd.DataFrame([input_vals])[feature_cols]
@@ -567,7 +576,7 @@ with tab1:
                 """)
         else:
             val = model.predict(X_new_s)[0]
-            st.success(f"Forecasted Target ({st.session_state.target_col}): **{val:,.4f}**")
+            st.success(f"Forecasted Target ({get_label(st.session_state.target_col)}): **{val:,.4f}**")
 
 # ---------------------------------------------------------------------------
 # Tab 2: Macro Stress Testing
@@ -578,16 +587,16 @@ with tab2:
     st.subheader("⚙️ Stress Test Shock Simulation Controls")
     stress_vals = {}
     
-    s_cols = st.columns(3)
+    s_cols = st.columns(2)
     for i, feat in enumerate(feature_cols):
         s = stats[feat]
-        with s_cols[i % 3]:
-            # Provide slider for dynamic shock testing around min/max bounds
+        with s_cols[i % 2]:
             stress_vals[feat] = st.slider(
-                f"Simulate: {feat}",
+                label=f"Simulate: {get_label(feat)}",
                 min_value=float(s["min"]),
                 max_value=float(s["max"]),
-                value=float(s["mean"])
+                value=float(s["mean"]),
+                help=f"Raw variable: {feat}"
             )
             
     X_stress = pd.DataFrame([stress_vals])[feature_cols]
