@@ -32,6 +32,42 @@ try:
 except ImportError:
     SMOTE_AVAILABLE = False
 
+
+# ===========================================================================
+# 🏷️ PASTE HERE: Friendly Business Labels Dictionary & Helper Function
+# ===========================================================================
+VARIABLE_LABELS = {
+    "rwtfpna": "Welfare TFP (National Prices)",
+    "rtfpna": "Total Factor Productivity (TFP)",
+    "pl_n": "Price Level of Capital Stock",
+    "pl_i": "Price Level of Capital Formation",
+    "pl_g": "Price Level of Govt Consumption",
+    "pl_con": "Price Level of Household Consumption",
+    "pl_gdpo": "Price Level of CGDPo",
+    "csh_i": "Investment Share of GDP",
+    "csh_c": "Consumption Share of GDP",
+    "csh_g": "Govt Expenditure Share of GDP",
+    "csh_x": "Merchandise Export Share",
+    "csh_m": "Merchandise Import Share",
+    "xr": "Exchange Rate (National Currency / USD)",
+    "delta": "Capital Stock Depreciation Rate",
+    "irr": "Real Internal Rate of Return",
+    "rdana": "Real Domestic Absorption (Consumption + Investment)",
+    "rconna": "Real Consumption (National Prices)",
+    "emp_to_pop_ratio": "Employment-to-Population Ratio",
+    "labsh": "Labor Compensation Share of GDP",
+    "total_change": "Total Commodity Index YoY Change",
+    "energy_change": "Energy Commodity Index YoY Change",
+    "metals_minerals_change": "Metals & Minerals Index YoY Change",
+    "agriculture_change": "Agriculture Commodity Index YoY Change",
+    "growthbucket": "Recession Event Indicator (Target)"
+}
+
+def get_label(col_name):
+    """Returns human-readable industry label if available."""
+    return VARIABLE_LABELS.get(col_name, col_name)
+
+# ===========================================================================
 st.set_page_config(page_title="Sovereign Risk Early Warning System", page_icon="🏦", layout="wide")
 
 # ---------------------------------------------------------------------------
