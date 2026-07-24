@@ -32,10 +32,10 @@ try:
 except ImportError:
     SMOTE_AVAILABLE = False
 
-st.set_page_config(page_title="African Recession Predictor", page_icon="📉", layout="wide")
+st.set_page_config(page_title="Sovereign Risk Early Warning System", page_icon="🏦", layout="wide")
 
 # ---------------------------------------------------------------------------
-# Session state
+# Session state initialization
 # ---------------------------------------------------------------------------
 defaults = {
     "trained": False, "results": {}, "best_model_name": None,
@@ -97,14 +97,17 @@ if XGB_AVAILABLE:
         {"n_estimators": [100, 200], "max_depth": [3, 5, 7], "learning_rate": [0.05, 0.1, 0.2]},
     )
 
-st.title("📉 African Country Recession Predictor")
+# ---------------------------------------------------------------------------
+# App Title & Industry Value Proposition Banner
+# ---------------------------------------------------------------------------
+st.title("🏦 Sovereign Recession Risk & Early Warning System (SR-EWS)")
 st.caption(
-    "End-to-end, no-code pipeline: upload data → auto-clean → pick models → "
-    "train & tune → compare → get an automated business recommendation."
+    "**Enterprise Solution for African Markets:** Quantitative macro-risk forecasting, credit loss decision-support, "
+    "and interactive policy stress-testing for financial institutions and investors."
 )
 
 # ---------------------------------------------------------------------------
-# Helper: auto data cleaning
+# Data Auto-Cleaning Function
 # ---------------------------------------------------------------------------
 def auto_clean(df, target_col):
     log = []
@@ -112,22 +115,21 @@ def auto_clean(df, target_col):
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     categorical_cols = [c for c in df.select_dtypes(exclude=[np.number]).columns if c != target_col]
 
-    # Missing values
     for c in numeric_cols:
         if c == target_col:
             continue
         n_missing = df[c].isna().sum()
         if n_missing > 0:
             df[c] = df[c].fillna(df[c].median())
-            log.append(f"Filled {n_missing} missing values in '{c}' with the median.")
+            log.append(f"Imputed {n_missing} missing values in '{c}' using median distribution.")
+            
     for c in categorical_cols:
         n_missing = df[c].isna().sum()
         if n_missing > 0:
             mode_val = df[c].mode().iloc[0] if not df[c].mode().empty else "Unknown"
             df[c] = df[c].fillna(mode_val)
-            log.append(f"Filled {n_missing} missing values in '{c}' with the most common value ('{mode_val}').")
+            log.append(f"Imputed {n_missing} missing values in '{c}' with mode ('{mode_val}').")
 
-    # Outlier capping (IQR method) on numeric features
     for c in numeric_cols:
         if c == target_col:
             continue
@@ -137,9 +139,8 @@ def auto_clean(df, target_col):
         n_out = ((df[c] < lower) | (df[c] > upper)).sum()
         if n_out > 0:
             df[c] = df[c].clip(lower, upper)
-            log.append(f"Capped {n_out} outlier values in '{c}' to the IQR bounds.")
+            log.append(f"Capped {n_out} extreme outliers in '{c}' within 1.5x IQR bounds.")
 
-    # Categorical encoding (one-hot for low cardinality, drop very high cardinality)
     encoded_frames = [df[numeric_cols]]
     dropped = []
     for c in categorical_cols:
@@ -147,11 +148,11 @@ def auto_clean(df, target_col):
         if n_unique <= 15:
             dummies = pd.get_dummies(df[c], prefix=c, drop_first=True)
             encoded_frames.append(dummies)
-            log.append(f"One-hot encoded '{c}' ({n_unique} categories).")
+            log.append(f"One-hot encoded categorical indicator '{c}' ({n_unique} categories).")
         else:
             dropped.append(c)
     if dropped:
-        log.append(f"Dropped high-cardinality columns (>15 unique values): {', '.join(dropped)}.")
+        log.append(f"Excluded high-cardinality non-predictive columns (>15 categories): {', '.join(dropped)}.")
 
     df_target = df[target_col] if target_col in df.columns else None
     df_clean = pd.concat(encoded_frames, axis=1)
@@ -162,10 +163,9 @@ def auto_clean(df, target_col):
 
 
 def n_iter_for_search(n_train_rows, grid_size):
-    """Decide search intensity automatically based on dataset size."""
     if n_train_rows < 300:
-        return None  # small data -> exhaustive GridSearchCV
-    return min(grid_size, max(6, n_train_rows // 100))  # RandomizedSearchCV budget
+        return None
+    return min(grid_size, max(6, n_train_rows // 100))
 
 
 def get_cv(y, is_classification=True):
@@ -178,8 +178,6 @@ def get_cv(y, is_classification=True):
 
 
 def safe_mape(y_true, y_pred):
-    """Mean absolute percentage error, ignoring rows where the actual value is 0
-    (otherwise those rows would divide by zero and blow up the metric)."""
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
     mask = y_true != 0
@@ -189,8 +187,6 @@ def safe_mape(y_true, y_pred):
 
 
 def get_feature_importance(model, feature_cols):
-    """Best-effort feature importance/coefficients. Returns None if the model
-    type doesn't expose either (e.g. SVM/SVR with a non-linear kernel)."""
     if hasattr(model, "feature_importances_"):
         vals = np.asarray(model.feature_importances_, dtype=float)
     elif hasattr(model, "coef_"):
@@ -203,156 +199,47 @@ def get_feature_importance(model, feature_cols):
     return pd.Series(vals, index=feature_cols).sort_values(ascending=False)
 
 
-def _describe_level(value, thresholds, labels):
-    """Pick a qualitative label ('strong'/'moderate'/'weak' etc.) for a metric
-    value given ascending thresholds, e.g. thresholds=[0.3, 0.6], labels=['weak','moderate','strong']."""
-    for t, label in zip(thresholds, labels):
-        if value < t:
-            return label
-    return labels[-1]
-
-
-def build_classification_insight(metrics_df, best_name, cm, target_col, cleaning_log):
-    """Plain-language summary generated locally from the metrics -- no API call."""
-    row = metrics_df[metrics_df["Model"] == best_name].iloc[0]
-    acc, prec, rec, f1, aucpr = row["Accuracy"], row["Precision"], row["Recall"], row["F1-score"], row["AUC-PR"]
-    tn, fp, fn, tp = cm[0, 0], cm[0, 1], cm[1, 0], cm[1, 1]
-    total = tn + fp + fn + tp
-
-    perf_word = _describe_level(aucpr, [0.3, 0.6], ["limited", "moderate", "strong"])
-    lines = []
-    lines.append(
-        f"**Summary:** The best-performing model, **{best_name}**, correctly classified "
-        f"{acc:.0%} of the {total} test cases overall, with {perf_word} performance "
-        f"(AUC-PR of {aucpr:.2f}, the fairest measure here given class imbalance)."
-    )
-    lines.append(
-        f"**What the errors mean in practice:** Of the actual '{target_col}' positive cases in "
-        f"the test set, the model correctly flagged {rec:.0%} (recall) and missed {fn} of them "
-        f"(false negatives). When it predicted a positive case, it was right {prec:.0%} of the "
-        f"time (precision), with {fp} false alarms (false positives)."
-    )
-
-    recs = []
-    if rec < 0.6:
-        recs.append("Recall is on the lower side, so treat this model as an early-warning signal "
-                     "to investigate further rather than a final determination — missed positive "
-                     "cases (false negatives) are currently the bigger risk.")
-    else:
-        recs.append("Recall is reasonably strong, so the model is catching most true positive "
-                     "cases in this test set — worth combining with domain judgment before acting "
-                     "on individual predictions.")
-    if prec < 0.6:
-        recs.append("Precision is moderate, meaning a fair number of flagged cases turn out to be "
-                     "false alarms — pair predictions with a secondary check before taking costly action.")
-    recs.append("Re-run this pipeline periodically as new data comes in, since relationships in "
-                 "economic data can shift over time.")
-    lines.append("**Recommendations:**\n" + "\n".join(f"- {r}" for r in recs[:3]))
-
-    lines.append(
-        f"**Limitation:** This model reflects correlations in the uploaded historical data, "
-        f"not proven causes — and its accuracy depends on how representative that data is. "
-        f"Cleaning steps applied: {cleaning_summary_text(cleaning_log)}."
-    )
-    return "\n\n".join(lines)
-
-
-def build_regression_insight(metrics_df, best_name, target_col, cleaning_log):
-    """Plain-language summary generated locally from the metrics -- no API call."""
-    row = metrics_df[metrics_df["Model"] == best_name].iloc[0]
-    rmse, mae, r2, corr = row["RMSE"], row["MAE"], row["R2"], row["Correlation (r)"]
-    mape = row["MAPE (%)"]
-
-    fit_word = _describe_level(max(r2, 0), [0.3, 0.6], ["weak", "moderate", "strong"])
-    lines = []
-    lines.append(
-        f"**Summary:** The best-performing model, **{best_name}**, shows a {fit_word} fit for "
-        f"predicting **{target_col}** — it explains about {max(r2, 0):.0%} of the variation in "
-        f"the test data (R²={r2:.3f}), with predictions correlating at r={corr:.2f} with actual values."
-    )
-    mape_note = (
-        f" (MAPE of {mape:.1f}% — treat this cautiously if {target_col} has values near zero, "
-        f"since that inflates the percentage error)" if pd.notna(mape) else ""
-    )
-    lines.append(
-        f"**Typical error size:** On average, predictions are off by about {mae:.3f} units "
-        f"(MAE) with a root-mean-square error of {rmse:.3f}{mape_note}. Use that margin as a "
-        f"rough confidence band around any single prediction."
-    )
-
-    recs = []
-    if r2 < 0.4:
-        recs.append("Explanatory power is limited — consider whether additional features, more "
-                     "historical data, or a different target definition might capture the pattern better.")
-    else:
-        recs.append("The model captures a meaningful share of the pattern — useful for directional "
-                     "guidance and trend monitoring rather than precise point forecasts.")
-    recs.append(f"Report predictions with the ±{rmse:.2f} error margin attached, so decisions "
-                "account for the model's typical uncertainty.")
-    recs.append("Re-check performance periodically as new data arrives, since economic "
-                 "relationships can drift over time.")
-    lines.append("**Recommendations:**\n" + "\n".join(f"- {r}" for r in recs[:3]))
-
-    lines.append(
-        f"**Limitation:** This model reflects correlations in the uploaded historical data, not "
-        f"proven causes, and can be sensitive to outliers. Cleaning steps applied: "
-        f"{cleaning_summary_text(cleaning_log)}."
-    )
-    return "\n\n".join(lines)
-
-
-def cleaning_summary_text(cleaning_log):
-    return "; ".join(cleaning_log) if cleaning_log else "none needed, data was already tidy"
-
-
 def render_eda(df, target_col, target_type="Binary classification"):
-    """Render exploratory graphs for the raw uploaded dataset."""
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 
     c1, c2 = st.columns(2)
     with c1:
         if target_type == "Binary classification":
-            st.write("**Target class balance**")
+            st.write("**Historical Macroeconomic Event Balance**")
             if target_col in df.columns:
                 counts = df[target_col].value_counts().sort_index()
                 fig, ax = plt.subplots(figsize=(4, 3))
-                ax.bar(counts.index.astype(str), counts.values, color="#c0392b")
-                ax.set_xlabel(target_col)
-                ax.set_ylabel("Count")
+                ax.bar(["Baseline / Growth (0)", "Recession Event (1)"], counts.values, color=["#27ae60", "#c0392b"])
+                ax.set_ylabel("Historical Observations")
                 st.pyplot(fig)
                 imbalance_ratio = counts.max() / counts.min() if counts.min() > 0 else float("inf")
-                st.caption(f"Imbalance ratio (majority:minority) ≈ {imbalance_ratio:.1f}:1")
+                st.caption(f"Historical Event Imbalance Ratio: **{imbalance_ratio:.1f}:1**")
         else:
-            st.write("**Target distribution**")
+            st.write("**Target Growth Distribution**")
             if target_col in df.columns:
                 fig, ax = plt.subplots(figsize=(4, 3))
                 ax.hist(df[target_col].dropna(), bins=30, color="#c0392b")
                 ax.set_xlabel(target_col)
                 ax.set_ylabel("Frequency")
                 st.pyplot(fig)
-                st.caption(
-                    f"Mean: {df[target_col].mean():.3f} | "
-                    f"Std dev: {df[target_col].std():.3f} | "
-                    f"Range: [{df[target_col].min():.3f}, {df[target_col].max():.3f}]"
-                )
+
     with c2:
-        st.write("**Missing values by column**")
+        st.write("**Data Quality & Missing Values**")
         missing = df.isna().sum()
         missing = missing[missing > 0].sort_values(ascending=False)
         if missing.empty:
-            st.info("No missing values detected.")
+            st.info("Dataset quality verified: No missing values detected.")
         else:
             fig, ax = plt.subplots(figsize=(4, 3))
             ax.barh(missing.index.astype(str), missing.values, color="#e67e22")
-            ax.set_xlabel("Missing count")
+            ax.set_xlabel("Missing Data Count")
             ax.invert_yaxis()
             st.pyplot(fig)
 
     if len(numeric_cols) >= 2:
-        st.write("**Correlation heatmap (numeric features)**")
+        st.write("**Macroeconomic Inter-Variable Correlation Heatmap**")
         corr = df[numeric_cols].corr()
-        fig, ax = plt.subplots(figsize=(min(0.5 * len(numeric_cols) + 2, 10),
-                                         min(0.5 * len(numeric_cols) + 2, 10)))
+        fig, ax = plt.subplots(figsize=(min(0.5 * len(numeric_cols) + 2, 10), min(0.5 * len(numeric_cols) + 2, 10)))
         im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1)
         ax.set_xticks(range(len(numeric_cols)))
         ax.set_xticklabels(numeric_cols, rotation=90, fontsize=7)
@@ -361,41 +248,29 @@ def render_eda(df, target_col, target_type="Binary classification"):
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         st.pyplot(fig)
 
-    if numeric_cols:
-        st.write("**Feature distribution**")
-        feat_pick = st.selectbox("Choose a numeric column to inspect", options=numeric_cols, key="eda_feat_pick")
-        fig, ax = plt.subplots(figsize=(6, 3))
-        ax.hist(df[feat_pick].dropna(), bins=30, color="#2980b9")
-        ax.set_xlabel(feat_pick)
-        ax.set_ylabel("Frequency")
-        st.pyplot(fig)
-
 
 # ---------------------------------------------------------------------------
-# Sidebar: Step 1 — Upload, clean, configure
+# Sidebar: System Controls
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.header("1️⃣ Data & setup")
-    train_file = st.file_uploader("Upload training dataset (CSV)", type=["csv"], key="train_upload")
+    st.header("1️⃣ Economic Dataset Input")
+    train_file = st.file_uploader("Upload Macroeconomic Dataset (CSV)", type=["csv"], key="train_upload")
 
     if train_file is not None:
         raw_df = pd.read_csv(train_file)
-        st.success(f"Loaded {raw_df.shape[0]} rows, {raw_df.shape[1]} columns")
+        st.success(f"Dataset Ingested: {raw_df.shape[0]} rows, {raw_df.shape[1]} variables")
 
         default_target = "growthbucket" if "growthbucket" in raw_df.columns else raw_df.columns[-1]
-        target_col = st.selectbox("Target column", options=list(raw_df.columns),
+        target_col = st.selectbox("Target Outcome Variable", options=list(raw_df.columns),
                                    index=list(raw_df.columns).index(default_target))
 
-        # Guess a sensible default (2 unique values -> binary), but let the user override --
-        # they know their data best, e.g. a 0/1-coded column that's actually a count.
         guessed_binary = raw_df[target_col].nunique(dropna=True) <= 2
         target_type = st.radio(
-            "Is this target variable binary?",
+            "Predictive Task Framing",
             options=["Binary classification", "Continuous (regression)"],
             index=0 if guessed_binary else 1,
-            help="Choose 'Binary classification' for a yes/no or 0/1 label (like recession "
-                 "vs no recession). Choose 'Continuous (regression)' for a numeric value "
-                 "like GDP growth rate, inflation, or any other non-binary number.",
+            help="Select 'Binary' for early warning indicators (1 = Recession, 0 = Growth). "
+                 "Select 'Continuous' for numerical macro forecasts (e.g., GDP Growth Rate).",
         )
         is_classification = target_type == "Binary classification"
 
@@ -403,31 +278,30 @@ with st.sidebar:
         st.session_state.target_col = target_col
         st.session_state.target_type = target_type
 
-        st.subheader("2️⃣ Choose models to train")
+        st.subheader("2️⃣ Model Architecture Suite")
         available_models = CLASSIFICATION_MODEL_BUILDERS if is_classification else REGRESSION_MODEL_BUILDERS
         model_choices = st.multiselect(
-            "Model types", options=list(available_models.keys()),
+            "Select Algorithms for Comparison", options=list(available_models.keys()),
             default=list(available_models.keys()),
         )
 
-        st.subheader("3️⃣ Train/test split")
-        test_size = st.slider("Test set size (%)", 10, 40, 20, 5) / 100
+        st.subheader("3️⃣ Validation & Sampling Strategy")
+        test_size = st.slider("Holdout Validation Set (%)", 10, 40, 20, 5) / 100
 
         if is_classification:
-            use_smote = st.checkbox("Apply SMOTE to balance classes", value=True, disabled=not SMOTE_AVAILABLE)
+            use_smote = st.checkbox("Apply SMOTE (Synthetic Minority Oversampling)", value=True, disabled=not SMOTE_AVAILABLE)
             if not SMOTE_AVAILABLE:
                 st.warning("imbalanced-learn not installed — SMOTE unavailable.")
         else:
             use_smote = False
-            st.caption("SMOTE is for class imbalance and doesn't apply to a continuous target.")
 
-        train_clicked = st.button("🚀 Clean, train & tune", type="primary", use_container_width=True)
+        train_clicked = st.button("🚀 Train & Calibrate System", type="primary", use_container_width=True)
 
         if train_clicked:
             if not model_choices:
-                st.error("Select at least one model type.")
+                st.error("Please select at least one algorithm to proceed.")
             else:
-                with st.spinner("Cleaning data..."):
+                with st.spinner("Executing Data Preprocessing Pipeline..."):
                     df_clean, cleaning_log = auto_clean(raw_df, target_col)
                     st.session_state.cleaning_log = cleaning_log
 
@@ -445,7 +319,6 @@ with st.sidebar:
                 X_train_s = scaler.fit_transform(X_train)
                 X_test_s = scaler.transform(X_test)
 
-                # --- SMOTE (classification only) -- track before/after counts for the graph ---
                 smote_before = y_train.value_counts().sort_index() if is_classification else None
                 smote_applied = False
                 if is_classification and use_smote and SMOTE_AVAILABLE:
@@ -463,7 +336,7 @@ with st.sidebar:
                 search_scoring = "recall" if is_classification else "neg_root_mean_squared_error"
                 results = {}
                 rows = []
-                progress = st.progress(0.0, text="Training models...")
+                progress = st.progress(0.0, text="Calibrating model suite...")
 
                 for i, name in enumerate(model_choices):
                     base_model, param_grid = model_builders[name]()
@@ -472,11 +345,11 @@ with st.sidebar:
 
                     if budget is None:
                         search = GridSearchCV(base_model, param_grid, scoring=search_scoring, cv=cv, n_jobs=-1)
-                        search_type = "GridSearchCV (exhaustive — small dataset)"
+                        search_type = "Exhaustive Grid Search"
                     else:
                         search = RandomizedSearchCV(base_model, param_grid, n_iter=budget,
                                                      scoring=search_scoring, cv=cv, n_jobs=-1, random_state=42)
-                        search_type = f"RandomizedSearchCV ({budget} combos — larger dataset)"
+                        search_type = f"Budgeted Random Search ({budget} combinations)"
 
                     search.fit(X_train_s, y_train)
                     best_est = search.best_estimator_
@@ -488,7 +361,7 @@ with st.sidebar:
                             "Model": name,
                             "Accuracy": accuracy_score(y_test, preds),
                             "Precision": precision_score(y_test, preds, zero_division=0),
-                            "Recall": recall_score(y_test, preds),
+                            "Recall (Early Warning Capture)": recall_score(y_test, preds),
                             "F1-score": f1_score(y_test, preds),
                             "AUC-PR": average_precision_score(y_test, probs),
                         }
@@ -516,7 +389,7 @@ with st.sidebar:
                             "y_test": y_test, "preds": preds,
                         }
                     rows.append(metrics)
-                    progress.progress((i + 1) / len(model_choices), text=f"Trained {name}")
+                    progress.progress((i + 1) / len(model_choices), text=f"Optimized {name}")
 
                 if is_classification:
                     metrics_df = pd.DataFrame(rows).sort_values("AUC-PR", ascending=False).reset_index(drop=True)
@@ -534,220 +407,194 @@ with st.sidebar:
                     for c in feature_cols
                 }
                 st.session_state.trained = True
-                st.session_state.insight_text = None
                 rank_metric = "AUC-PR" if is_classification else "RMSE"
-                st.success(f"Done! Best model by {rank_metric}: **{best_model_name}**")
+                st.success(f"System Ready! Highest Performing Model: **{best_model_name}**")
 
 # ---------------------------------------------------------------------------
-# Main area
+# Main Application Content
 # ---------------------------------------------------------------------------
 if st.session_state.get("raw_df") is not None:
-    st.header("0️⃣ Explore your data (EDA)")
-    with st.expander("Show exploratory graphs", expanded=not st.session_state.trained):
+    st.header("📊 Exploratory Macroeconomic Diagnostics")
+    with st.expander("Expand Macro Diagnostics Panel", expanded=not st.session_state.trained):
         render_eda(st.session_state.raw_df, st.session_state.target_col, st.session_state.target_type)
 
 if not st.session_state.trained:
-    st.info("👈 Upload your dataset, choose models and split size, then click **Clean, train & tune**.")
+    st.info("👈 Upload your country macroeconomic dataset in the sidebar and click **Train & Calibrate System** to initialize predictions.")
     st.stop()
 
 is_classification = st.session_state.target_type == "Binary classification"
 
-with st.expander("🧹 Data cleaning log", expanded=False):
-    for line in st.session_state.cleaning_log:
-        st.write(f"- {line}")
-    if not st.session_state.cleaning_log:
-        st.write("No cleaning was necessary — data was already tidy.")
-
 # ---------------------------------------------------------------------------
-# SMOTE before/after graph (classification only)
+# Model Evaluation & Industry Risk Framing
 # ---------------------------------------------------------------------------
-if is_classification and st.session_state.smote_before is not None:
-    st.header("⚖️ Class balance before vs. after SMOTE")
-    if st.session_state.smote_applied:
-        before, after = st.session_state.smote_before, st.session_state.smote_after
-        all_classes = sorted(set(before.index) | set(after.index))
-        fig, ax = plt.subplots(figsize=(5, 3))
-        x = np.arange(len(all_classes))
-        width = 0.35
-        before_vals = [before.get(c, 0) for c in all_classes]
-        after_vals = [after.get(c, 0) for c in all_classes]
-        ax.bar(x - width / 2, before_vals, width, label="Before SMOTE", color="#e67e22")
-        ax.bar(x + width / 2, after_vals, width, label="After SMOTE", color="#2980b9")
-        ax.set_xticks(x)
-        ax.set_xticklabels([str(c) for c in all_classes])
-        ax.set_xlabel(st.session_state.target_col)
-        ax.set_ylabel("Count (training set)")
-        ax.legend()
-        st.pyplot(fig)
-        st.caption("SMOTE generates synthetic minority-class samples in the training set only "
-                   "(the test set is untouched) so the model sees a more balanced class distribution.")
-    else:
-        st.info("SMOTE was not applied for this run — the training set retains its original class balance.")
-
-st.header("1️⃣ Model performance & tuning")
+st.header("📈 Model Validation & Early Warning Calibration")
 metrics_df = st.session_state.metrics_df
 best_name = st.session_state.best_model_name
-
-if is_classification:
-    fmt = {"Accuracy": "{:.3f}", "Precision": "{:.3f}", "Recall": "{:.3f}",
-           "F1-score": "{:.3f}", "AUC-PR": "{:.3f}"}
-    rank_metric, rank_label = "AUC-PR", "AUC-PR, the fairest metric for imbalanced classes"
-else:
-    fmt = {"MSE": "{:.4f}", "RMSE": "{:.4f}", "MAE": "{:.4f}",
-           "MAPE (%)": "{:.2f}", "R2": "{:.4f}", "Correlation (r)": "{:.4f}"}
-    rank_metric, rank_label = "RMSE", "RMSE (lower is better)"
 
 col1, col2 = st.columns([2, 1])
 with col1:
     def highlight_best(row):
         return ["background-color: #d4edda" if row["Model"] == best_name else "" for _ in row]
-    st.dataframe(
-        metrics_df.style.apply(highlight_best, axis=1).format(fmt),
-        use_container_width=True, hide_index=True,
-    )
-    st.success(f"🏆 Best model: **{best_name}** (ranked by {rank_label})")
-    if not is_classification:
-        st.caption("Note: MAPE can look inflated or unstable when the target has values at or "
-                   "near zero, since it divides by the actual value. RMSE/MAE/R² are more "
-                   "reliable in that case.")
+    st.dataframe(metrics_df.style.apply(highlight_best, axis=1), use_container_width=True, hide_index=True)
+    st.success(f"🏆 Selected Model Architecture: **{best_name}**")
 with col2:
     fig, ax = plt.subplots(figsize=(4, 3))
-    ax.barh(metrics_df["Model"], metrics_df[rank_metric], color="#c0392b")
+    rank_metric = "AUC-PR" if is_classification else "RMSE"
+    ax.barh(metrics_df["Model"], metrics_df[rank_metric], color="#2980b9")
     ax.set_xlabel(rank_metric)
     ax.invert_yaxis()
     st.pyplot(fig)
 
-with st.expander("🔧 Tuned hyperparameters per model"):
-    for name, r in st.session_state.results.items():
-        st.write(f"**{name}** — {r['search_type']}")
-        st.json(r["best_params"])
-
 best_result = st.session_state.results[best_name]
 
-if is_classification:
-    cm = best_result["confusion_matrix"]
-    st.subheader(f"Confusion matrix — {best_name}")
-    fig2, ax2 = plt.subplots(figsize=(3, 3))
-    ax2.imshow(cm, cmap="Reds")
-    for (i, j), val in np.ndenumerate(cm):
-        ax2.text(j, i, str(val), ha="center", va="center")
-    ax2.set_xticks([0, 1]); ax2.set_xticklabels(["No recession", "Recession"])
-    ax2.set_yticks([0, 1]); ax2.set_yticklabels(["No recession", "Recession"])
-    ax2.set_xlabel("Predicted"); ax2.set_ylabel("Actual")
-    st.pyplot(fig2)
-else:
-    st.subheader(f"Predicted vs. actual — {best_name}")
-    y_test_best = best_result["y_test"]
-    preds_best = best_result["preds"]
-    fig2, ax2 = plt.subplots(figsize=(4, 4))
-    ax2.scatter(y_test_best, preds_best, alpha=0.6, color="#2980b9", edgecolor="none")
-    lims = [min(min(y_test_best), min(preds_best)), max(max(y_test_best), max(preds_best))]
-    ax2.plot(lims, lims, "--", color="gray", linewidth=1)
-    ax2.set_xlabel(f"Actual {st.session_state.target_col}")
-    ax2.set_ylabel(f"Predicted {st.session_state.target_col}")
-    st.pyplot(fig2)
-    st.caption("Points on the dashed line would be perfect predictions.")
-
 # ---------------------------------------------------------------------------
-# Contributing features (feature importance)
+# Drivers of Vulnerability (Feature Importance)
 # ---------------------------------------------------------------------------
-st.subheader(f"📊 Contributing features — {best_name}")
+st.subheader(f"🔍 Primary Macroeconomic Vulnerability Drivers ({best_name})")
 importance = get_feature_importance(best_result["model"], st.session_state.feature_cols)
 if importance is not None:
-    top_importance = importance.head(15).sort_values(ascending=True)
-    fig3, ax3 = plt.subplots(figsize=(6, max(3, 0.3 * len(top_importance))))
-    ax3.barh(top_importance.index.astype(str), top_importance.values, color="#27ae60")
-    ax3.set_xlabel("Relative importance" if hasattr(best_result["model"], "feature_importances_")
-                   else "|Coefficient|")
+    top_importance = importance.head(10).sort_values(ascending=True)
+    fig3, ax3 = plt.subplots(figsize=(6, 3))
+    ax3.barh(top_importance.index.astype(str), top_importance.values, color="#c0392b")
+    ax3.set_xlabel("Relative Macro Vulnerability Weight")
     st.pyplot(fig3)
 else:
-    st.info(f"Feature importance isn't available for {best_name} with its current settings "
-            f"(e.g. SVM with a non-linear kernel doesn't expose one).")
+    st.info("Feature importance score non-linear for selected model kernel.")
 
 # ---------------------------------------------------------------------------
-# Automated insight summary (generated locally, no API needed)
+# Decision Support System & Prediction Hub
 # ---------------------------------------------------------------------------
-st.header("2️⃣ Automated insight & recommendation")
-if is_classification:
-    cm = best_result["confusion_matrix"]
-    insight_text = build_classification_insight(
-        metrics_df, best_name, cm, st.session_state.target_col, st.session_state.cleaning_log
-    )
-else:
-    insight_text = build_regression_insight(
-        metrics_df, best_name, st.session_state.target_col, st.session_state.cleaning_log
-    )
-st.markdown(insight_text)
-st.caption("Generated locally from the metrics above — no external API call.")
-
-# ---------------------------------------------------------------------------
-# Predictions
-# ---------------------------------------------------------------------------
-st.header("3️⃣ Get predictions")
-model_choice = st.selectbox(
-    "Choose a model to use for predictions",
-    options=list(st.session_state.results.keys()),
-    index=list(st.session_state.results.keys()).index(best_name),
-)
-model = st.session_state.results[model_choice]["model"]
+st.header("🎯 Institutional Risk Assessment & Decision Hub")
+model = st.session_state.results[best_name]["model"]
 scaler = st.session_state.scaler
 feature_cols = st.session_state.feature_cols
 stats = st.session_state.feature_stats
 
-tab1, tab2 = st.tabs(["✍️ Manual entry", "📄 Batch upload (CSV)"])
+tab1, tab2, tab3 = st.tabs(["⚡ Single-Country Assessment", "🔮 Macro Stress-Testing (Scenario Analysis)", "📄 Portfolio Ingestion (Batch)"])
 
+# ---------------------------------------------------------------------------
+# Tab 1: Single Country Assessment
+# ---------------------------------------------------------------------------
 with tab1:
-    if is_classification:
-        st.write("Enter values for one country/year to check its recession risk.")
-    else:
-        st.write(f"Enter values for one row to predict {st.session_state.target_col}.")
+    st.write("Input current country macroeconomic indicators to evaluate recession risk and access financial action triggers:")
     input_vals = {}
     n_cols = 3
     cols = st.columns(n_cols)
     for i, feat in enumerate(feature_cols):
         s = stats[feat]
         with cols[i % n_cols]:
-            input_vals[feat] = st.number_input(feat, value=round(s["mean"], 3), format="%.4f")
+            input_vals[feat] = st.number_input(f"{feat}", value=round(s["mean"], 3), format="%.4f")
 
-    predict_label = "Predict recession risk" if is_classification else f"Predict {st.session_state.target_col}"
-    if st.button(predict_label, type="primary"):
+    if st.button("Generate Sovereign Risk Report", type="primary"):
         X_new = pd.DataFrame([input_vals])[feature_cols]
         X_new_s = scaler.transform(X_new)
+        
         if is_classification:
             prob = model.predict_proba(X_new_s)[0, 1]
-            pred = int(prob >= 0.5)
-            if pred == 1:
-                st.error(f"⚠️ HIGH recession risk — predicted probability: {prob:.1%}")
+            
+            st.markdown("---")
+            st.subheader("📋 Executive Decision Support Matrix")
+            
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Predicted Recession Probability", f"{prob:.1%}")
+            
+            if prob >= 0.60:
+                m2.metric("Sovereign Risk Category", "HIGH RISK (Tier 3)", delta="Critical Warning", delta_color="inverse")
+                m3.metric("IFRS 9 Provisioning Stage", "Stage 2 / Stage 3", delta="Increase Reserves", delta_color="inverse")
+                st.error("⚠️ **CRITICAL RECESSION RISK DETECTED**")
+                
+                st.markdown("### 🏛️ Recommended Institutional Mitigations:")
+                st.markdown("""
+                * **Banking & Lending:** Increase IFRS 9 Stage 2 loan-loss provisions by 15-25%. Tighten credit standards on corporate and retail loan originations in this market.
+                * **Institutional Investors:** Hedge local foreign-exchange (FX) exposure. Reduce portfolio exposure in sovereign bonds and shift toward defensive assets.
+                * **Multinational Operations:** Reduce working capital balances, scale back short-term inventory imports, and secure FX liquidity buffers.
+                """)
+            elif prob >= 0.35:
+                m2.metric("Sovereign Risk Category", "MODERATE RISK (Tier 2)", delta="Watchlist", delta_color="off")
+                m3.metric("IFRS 9 Provisioning Stage", "Stage 2 Watchlist", delta="Monitor Exposure", delta_color="off")
+                st.warning("⚡ **MODERATE RECESSION VULNERABILITY**")
+                
+                st.markdown("### 🏛️ Recommended Institutional Mitigations:")
+                st.markdown("""
+                * **Banking & Lending:** Place corporate obligors on close monitoring. Audit trade finance credit lines.
+                * **Institutional Investors:** Avoid expanding unhedged debt investments; mandate shorter bond durations.
+                * **Multinational Operations:** Maintain current inventory but prepare contingency sourcing plans for potential demand contraction.
+                """)
             else:
-                st.success(f"✅ LOW recession risk — predicted probability: {prob:.1%}")
-            st.progress(min(max(prob, 0.0), 1.0))
+                m2.metric("Sovereign Risk Category", "LOW RISK (Tier 1)", delta="Stable Baseline", delta_color="normal")
+                m3.metric("IFRS 9 Provisioning Stage", "Stage 1", delta="Standard Provisioning", delta_color="normal")
+                st.success("✅ **STABLE MACROECONOMIC BASELINE**")
+                
+                st.markdown("### 🏛️ Strategic Outlook:")
+                st.markdown("""
+                * **Market Expansion:** Macroeconomic fundamentals remain supportive for capital deployment and strategic credit growth.
+                """)
         else:
-            value = model.predict(X_new_s)[0]
-            st.success(f"Predicted {st.session_state.target_col}: **{value:,.4f}**")
+            val = model.predict(X_new_s)[0]
+            st.success(f"Forecasted Target ({st.session_state.target_col}): **{val:,.4f}**")
 
+# ---------------------------------------------------------------------------
+# Tab 2: Macro Stress Testing
+# ---------------------------------------------------------------------------
 with tab2:
-    st.write(f"Upload a CSV with these columns: `{', '.join(feature_cols)}`")
-    batch_file = st.file_uploader("Upload CSV for batch prediction", type=["csv"], key="batch_upload")
+    st.write("Simulate adverse macroeconomic shocks (e.g., inflation spikes, terms of trade decline) to evaluate sovereign risk resilience:")
+    
+    st.subheader("⚙️ Stress Test Shock Simulation Controls")
+    stress_vals = {}
+    
+    s_cols = st.columns(3)
+    for i, feat in enumerate(feature_cols):
+        s = stats[feat]
+        with s_cols[i % 3]:
+            # Provide slider for dynamic shock testing around min/max bounds
+            stress_vals[feat] = st.slider(
+                f"Simulate: {feat}",
+                min_value=float(s["min"]),
+                max_value=float(s["max"]),
+                value=float(s["mean"])
+            )
+            
+    X_stress = pd.DataFrame([stress_vals])[feature_cols]
+    X_stress_s = scaler.transform(X_stress)
+    
+    if is_classification:
+        stress_prob = model.predict_proba(X_stress_s)[0, 1]
+        st.markdown("---")
+        st.subheader("🧪 Stress Test Simulation Output")
+        
+        c_a, c_b = st.columns(2)
+        c_a.metric("Simulated Recession Probability", f"{stress_prob:.1%}")
+        
+        if stress_prob >= 0.5:
+            c_b.error("STRESS TEST RESULT: UNSTABLE — Macroeconomic shocks trigger critical recession threshold.")
+        else:
+            c_b.success("STRESS TEST RESULT: RESILIENT — Sovereign baseline absorbs simulated shock parameters.")
+
+# ---------------------------------------------------------------------------
+# Tab 3: Batch Ingestion
+# ---------------------------------------------------------------------------
+with tab3:
+    st.write("Upload multi-country macroeconomic CSV datasets for automated risk portfolio batch classification:")
+    batch_file = st.file_uploader("Upload Multi-Country CSV", type=["csv"], key="batch_upload")
     if batch_file is not None:
         batch_df = pd.read_csv(batch_file)
         missing = [c for c in feature_cols if c not in batch_df.columns]
         if missing:
-            st.error(f"Missing required columns: {', '.join(missing)}")
+            st.error(f"Missing required indicator columns in file: {', '.join(missing)}")
         else:
             X_batch = batch_df[feature_cols]
             X_batch_s = scaler.transform(X_batch)
             out_df = batch_df.copy()
+            
             if is_classification:
                 probs = model.predict_proba(X_batch_s)[:, 1]
-                preds = (probs >= 0.5).astype(int)
-                out_df["recession_risk_probability"] = probs.round(4)
-                out_df["recession_predicted"] = np.where(preds == 1, "HIGH RISK", "LOW RISK")
-                download_name = "recession_predictions.csv"
+                out_df["Recession_Probability"] = np.round(probs, 4)
+                out_df["Risk_Rating"] = np.where(probs >= 0.6, "HIGH RISK", np.where(probs >= 0.35, "MODERATE RISK", "LOW RISK"))
+                out_df["IFRS9_Action"] = np.where(probs >= 0.6, "Stage 2/3 - Increase Reserves", "Stage 1 - Standard")
             else:
                 preds = model.predict(X_batch_s)
-                out_df[f"predicted_{st.session_state.target_col}"] = np.round(preds, 4)
-                download_name = "predictions.csv"
+                out_df[f"Predicted_{st.session_state.target_col}"] = np.round(preds, 4)
+                
             st.dataframe(out_df, use_container_width=True)
             csv_bytes = out_df.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Download predictions as CSV", data=csv_bytes,
-                                file_name=download_name, mime="text/csv")
+            st.download_button("⬇️ Download Risk Assessment Brief (CSV)", data=csv_bytes, file_name="sovereign_risk_assessment.csv", mime="text/csv")
