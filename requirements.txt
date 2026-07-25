@@ -1,9 +1,7 @@
-streamlit>=1.35.0
-fastapi>=0.109.0
-uvicorn>=0.27.0
-pydantic>=2.6.0
-numpy>=1.26.0
-pandas>=2.2.0
-pillow>=10.4.0
-scikit-learn
+streamlit
+pandas
+numpy
 plotly
+scikit-learn
+imbalanced-learn
+xgboost
