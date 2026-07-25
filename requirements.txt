@@ -4,10 +4,3 @@ uvicorn
 pydantic
 numpy
 pandas
-scikit-learn
-scipy
-joblib
-plotly
-sqlalchemy
-reportlab
-requests
