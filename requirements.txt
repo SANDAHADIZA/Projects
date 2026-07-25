@@ -1,8 +1,8 @@
 streamlit
 pandas
 numpy
-matplotlib
+joblib
+plotly
 scikit-learn
-scipy
 xgboost
 imbalanced-learn
