@@ -94,12 +94,12 @@ def calculate_risk_percent(row):
 # ==============================================================================
 st.markdown('<div class="header-bar"><span class="header-title">AFRICA RISK INTELLIGENCE PLATFORM</span></div>', unsafe_allow_html=True)
 
-page = st.sidebar.radio("SYSTEM MENU", ["🏠 Home", "📊 Live Risk Monitor", "⚡ Stress Tester", "🤖 Intelligence Brief"])
+page = st.sidebar.radio("SYSTEM MENU", ["🏠 Home", "📊 Live Risk Monitor", "⚡ Scenario Simulator", "🤖 AI Insight"])
 
 # --- PAGE: HOME (MAP REPLACED IMAGE) ---
 if page == "🏠 Home":
     st.markdown("## Institutional Sovereign Surveillance")
-    st.write("Real-time monitoring of African economic stability and recession convergence.")
+    st.write("AI powered Early Warning System for Predicting Econimuc Recessions in Africa.")
     
     col1, col2, col3 = st.columns(3)
     with col1:
